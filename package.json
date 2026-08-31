@@ -1,0 +1,57 @@
+{
+  "name": "orbyn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Autonomous Instagram commercial prospecting system (local-first).",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "next dev --port 4310",
+    "dev:worker": "tsx watch src/worker/main.ts",
+    "build": "next build",
+    "start": "node scripts/start.mjs",
+    "start:web": "next start --port 4310",
+    "start:worker": "tsx src/worker/main.ts",
+    "db:migrate": "tsx src/db/cli/migrate.ts",
+    "db:backup": "tsx src/db/cli/backup.ts",
+    "db:restore": "tsx src/db/cli/restore.ts",
+    "seed:demo": "tsx src/db/cli/seed-demo.ts",
+    "icons": "node scripts/generate-icons.mjs",
+    "tunnel": "node scripts/tunnel.mjs",
+    "dryrun:dm": "tsx src/integrations/browser/cli/dry-run.ts",
+    "smoke:dm": "tsx src/integrations/browser/cli/smoke-test.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "dotenv": "17.2.3",
+    "drizzle-orm": "0.45.2",
+    "next": "16.3.3",
+    "openai": "7.8.0",
+    "playwright-core": "1.62.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.8",
+    "@types/react-dom": "19.2.5",
+    "eslint": "9.39.1",
+    "eslint-config-next": "16.3.3",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

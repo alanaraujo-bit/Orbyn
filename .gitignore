@@ -1,0 +1,28 @@
+# secrets and operator-owned truth
+.env
+.env.local
+config/business.json
+
+# runtime state
+.chrome-profile/
+*.db
+*.db-wal
+*.db-shm
+data/
+backups/
+screenshots/
+traces/
+logs/
+
+# build artifacts
+.next/
+next-env.d.ts
+node_modules/
+*.tsbuildinfo
+coverage/
+
+# local tunnel and orchestration artifacts
+# Runtime logs carry lead handles and job detail: never versioned.
+*.log
+tunnel-url.txt
+aria-*.yaml

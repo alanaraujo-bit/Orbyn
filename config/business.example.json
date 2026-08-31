@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "owner": {
+    "name": "NOME DO RESPONSAVEL",
+    "role": "CARGO DO RESPONSAVEL"
+  },
+  "company": {
+    "name": "NOME DA EMPRESA",
+    "website": "https://exemplo.com.br",
+    "instagramHandle": "@handle_da_empresa"
+  },
+  "links": {
+    "whatsapp": "https://wa.me/5500000000000"
+  },
+  "positioning": {
+    "oneLinePitch": "Uma frase objetiva descrevendo o que a empresa entrega.",
+    "howItWorks": [
+      "Primeira etapa do processo de entrega",
+      "Segunda etapa do processo de entrega",
+      "Terceira etapa do processo de entrega"
+    ]
+  },
+  "revenueModel": "Descricao de como a empresa gera receita.",
+  "marketJargon": [
+    { "term": "Termo do setor", "definition": "Explicacao do termo em linguagem simples" }
+  ],
+  "verifiedClaims": [
+    "Afirmacao factual comprovada que a IA pode usar em conversas"
+  ],
+  "unverifiedClaims": [
+    "Afirmacao ainda sem evidencia e por isso bloqueada para a IA"
+  ],
+  "icp": {
+    "segments": ["Descricao de um segmento de cliente ideal"],
+    "keywords": ["palavra-chave de descoberta"]
+  },
+  "affiliateProgram": {
+    "topics": ["Tema de conteudo dos criadores desejados"],
+    "groupLink": "A DEFINIR",
+    "verifiedProgramClaims": []
+  },
+  "geography": "Brasil"
+}

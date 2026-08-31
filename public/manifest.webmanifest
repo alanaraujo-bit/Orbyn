@@ -1,0 +1,55 @@
+{
+  "id": "/",
+  "name": "Orbyn — Prospecção",
+  "short_name": "Orbyn",
+  "description": "Painel operacional de prospecção autônoma no Instagram.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fbfbfc",
+  "theme_color": "#2f66c4",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Alertas",
+      "short_name": "Alertas",
+      "url": "/alertas"
+    },
+    {
+      "name": "Funil de clientes",
+      "short_name": "Clientes",
+      "url": "/clientes"
+    },
+    {
+      "name": "Fila de jobs",
+      "short_name": "Jobs",
+      "url": "/jobs"
+    }
+  ]
+}
