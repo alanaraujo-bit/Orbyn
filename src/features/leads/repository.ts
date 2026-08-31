@@ -20,6 +20,7 @@ import {
   type PipelineStage,
 } from './states';
 import { priorityForScore, qualifies, scoreLead, type PublicProfileSignals } from './scoring';
+import { learnedKeywordWeights } from '@/features/experiments/keyword-learning';
 
 export interface DiscoveredProfile extends PublicProfileSignals {
   funnel: Funnel;
@@ -90,7 +91,10 @@ export function registerDiscoveredLead(profile: DiscoveredProfile): DiscoveryOut
       return { status: 'duplicate', lead: existing } satisfies DiscoveryOutcome;
     }
 
-    const scored = scoreLead(profile, profile.funnel);
+    // Learned keyword multipliers refine the official ICP; they never replace
+    // it. Until enough leads have been contacted they are all 1, so scoring is
+    // identical to the unlearned behaviour.
+    const scored = scoreLead(profile, profile.funnel, { learnedWeights: learnedKeywordWeights(db) });
     const now = nowIso();
     const retentionDays = getEnv().DATA_RETENTION_DAYS;
     const id = newId('lead');
@@ -317,6 +321,7 @@ export function qualifyLead(leadId: string, db: Db = getDb()): QualifyResult {
       isBusinessAccount: snapshot.isBusinessAccount ?? null,
     },
     lead.funnel as Funnel,
+    { learnedWeights: learnedKeywordWeights(db) },
   );
 
   const now = nowIso();

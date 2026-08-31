@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { getDb, type Db } from '@/db/client';
 import { events, experimentAssignments, experiments, experimentVariants } from '@/db/schema';
 import type { Funnel, PipelineStage } from '@/features/leads/states';
@@ -43,7 +43,7 @@ export interface VariantStats {
 }
 
 /** Leads that ever reached `stage`, taken from the immutable event log. */
-function leadsThatReached(stage: PipelineStage, db: Db): Set<string> {
+export function leadsThatReached(stage: PipelineStage, db: Db = getDb()): Set<string> {
   const rows = db
     .select({ leadId: events.leadId, payload: events.payload })
     .from(events)
@@ -86,18 +86,38 @@ export function twoProportionZ(successesA: number, totalA: number, successesB: n
   return Math.abs((rateA - rateB) / denominator);
 }
 
-export function analyzeExperiment(experimentId: string, db: Db = getDb()): ExperimentAnalysis | null {
+export function analyzeExperiment(
+  experimentId: string,
+  db: Db = getDb(),
+  now: Date = new Date(),
+): ExperimentAnalysis | null {
   const experiment = db.select().from(experiments).where(eq(experiments.id, experimentId)).get();
   if (!experiment) return null;
 
   const variants = db.select().from(experimentVariants).where(eq(experimentVariants.experimentId, experimentId)).all();
   const successLeads = leadsThatReached(experiment.primaryMetric as PipelineStage, db);
 
+  // Cohort window: only leads *assigned* inside it are counted, but their
+  // conversions count whenever they happen. Windowing the conversions instead
+  // would penalise recent assignments for not having converted yet.
+  //
+  // Without this, `analysisWindowDays` was stored and never read, so every
+  // assignment since the experiment began weighed the same. A message style
+  // that stopped working would stay averaged with months of old wins, and the
+  // test would get slower to react the longer it ran.
+  const windowStart = new Date(now.getTime() - experiment.analysisWindowDays * 86_400_000).toISOString();
+
   const stats: VariantStats[] = variants.map((variant) => {
     const assignments = db
       .select({ leadId: experimentAssignments.leadId })
       .from(experimentAssignments)
-      .where(and(eq(experimentAssignments.experimentId, experimentId), eq(experimentAssignments.variantId, variant.id)))
+      .where(
+        and(
+          eq(experimentAssignments.experimentId, experimentId),
+          eq(experimentAssignments.variantId, variant.id),
+          gte(experimentAssignments.assignedAt, windowStart),
+        ),
+      )
       .all();
     const successes = assignments.filter((row) => successLeads.has(row.leadId)).length;
     return {

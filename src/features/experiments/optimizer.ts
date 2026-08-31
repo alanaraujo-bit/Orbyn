@@ -12,9 +12,14 @@ const log = createLogger('optimizer');
 /**
  * Autonomous optimisation, inside hard limits.
  *
- * The optimizer may reweight variants, re-rank discovery terms and prefer send
- * windows. It may not touch `config/business.json`, operator ceilings, safety
- * policy, pricing or claims - those live outside this module by construction.
+ * The optimizer may reweight message variants, re-rank discovery terms and
+ * reweight ICP keywords. It may not touch `config/business.json`, operator
+ * ceilings, safety policy, pricing or claims - those live outside this module
+ * by construction.
+ *
+ * Every loop here is gated on its own evidence and refuses to act below it.
+ * Acting on a handful of leads would not be learning, only amplified noise -
+ * and unlike a variant weight, a keyword weight changes who gets messaged.
  */
 
 /** Maximum share a single variant may take, so exploration never dies out. */
