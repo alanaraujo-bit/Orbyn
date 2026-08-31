@@ -5,6 +5,7 @@ import { randomIntBetween } from '@/lib/time';
 import { sleep } from '@/lib/sleep';
 import { normalizeHandle, profileUrl } from '@/features/leads/handle';
 import { connectToChrome, disconnect, withAgentPage } from './cdp';
+import { parseProfileHeader } from './profile-header';
 import { detectSafetySignal } from './safety';
 
 const log = createLogger('browser.discovery');
@@ -102,10 +103,6 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
 
       const header = page.locator('header');
       const headerText = await header.innerText({ timeout: 5_000 }).catch(() => '');
-      const lines = headerText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
 
       const externalUrl = await header
         .locator('a[href^="http"]:not([href*="instagram.com"])')
@@ -113,8 +110,7 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
         .getAttribute('href', { timeout: 3_000 })
         .catch(() => null);
 
-      const category = lines.find((line) => /^[A-Za-zÀ-ú/ &·-]{3,40}$/.test(line) && line !== displayName) ?? null;
-      const bio = lines.slice(1).join(' ').slice(0, 600) || null;
+      const { bio, category } = parseProfileHeader(headerText, { handle, displayName });
 
       return {
         handle: normalizeHandle(handle),
@@ -123,11 +119,14 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
         category,
         externalUrl,
         followersCount,
-        isBusinessAccount: category !== null,
+        // Not derivable from the header text. This used to be `category !== null`,
+        // which really meant "the header contained a short line" - true for every
+        // profile, so every lead counted as a business account and collected the
+        // score and the persona that come with it.
+        isBusinessAccount: null,
         provenance: {
           displayName: 'instagram_profile_title',
           bio: 'instagram_profile_header',
-          category: 'instagram_profile_header',
           followersCount: 'instagram_profile_meta_description',
           externalUrl: 'instagram_profile_header_link',
         },

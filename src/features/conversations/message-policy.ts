@@ -148,13 +148,37 @@ function contentWords(value: string): string[] {
 
 /**
  * An observation about the lead may only be used when every content word of it
- * actually appears in the public profile snapshot we stored. This is what keeps
- * "Vi que vocês trabalham com distribuição de bebidas" legal and
- * "Imagino que vocês percam dinheiro com estoque" out.
+ * actually appears in text we are prepared to treat as a statement about their
+ * business. This is what keeps "Vi que vocês trabalham com distribuição de
+ * bebidas" legal and "Imagino que vocês percam dinheiro com estoque" out.
+ *
+ * The licensed text is deliberately narrow. It used to be the whole profile
+ * snapshot, which meant any word appearing anywhere licensed a claim built from
+ * it - and the snapshot was a raw scrape of the profile header. A distributor
+ * whose owner listed "Profissão mecânico" in his personal bio was told "Vi que
+ * você trabalha como mecânico": every word of the observation was present, so
+ * the check passed, and the claim was still wrong about the business.
+ *
+ * A word appearing near a business is not a fact about that business. Only a
+ * field whose meaning is established may license an assertion about what
+ * someone does.
  */
-export function validateObservation(observation: string | null, snapshotText: string): PolicyResult {
+export function validateObservation(observation: string | null, licensedText: string): PolicyResult {
   if (observation === null || observation.trim().length === 0) return { ok: true, violations: [] };
-  const haystack = new Set(contentWords(snapshotText));
+  if (licensedText.trim().length === 0) {
+    return {
+      ok: false,
+      violations: [
+        {
+          code: 'ungrounded_observation',
+          message:
+            'Nenhum campo de significado conhecido foi observado neste perfil; nada pode ser afirmado sobre a atividade dele.',
+          excerpt: observation.trim().slice(0, 120),
+        },
+      ],
+    };
+  }
+  const haystack = new Set(contentWords(licensedText));
   const missing = contentWords(observation).filter((word) => !haystack.has(word));
   if (missing.length === 0) return { ok: true, violations: [] };
   return {

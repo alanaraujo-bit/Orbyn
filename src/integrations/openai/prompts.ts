@@ -89,11 +89,18 @@ export function openerInstructions(config: BusinessConfig, funnel: Funnel, varia
     goal,
     'A primeira mensagem deve ter no máximo 3 frases curtas, terminar com uma pergunta simples e não conter link.',
     'Se não houver nada verdadeiro e específico a comentar sobre o perfil, defina observationUsed como null e escreva uma abertura neutra.',
+    // Only the category licenses a claim about what the business does. The bio
+    // is free text written by a person about themselves: a distributor whose
+    // owner listed "Profissão mecânico" got told he worked as a mechanic, and
+    // every word of that observation really was in the profile. Presence of a
+    // word near a business is not a fact about the business.
+    'A ÚNICA fonte permitida para observationUsed é o campo "categoria" do bloco PERFIL PÚBLICO OBSERVADO. Se esse campo não estiver presente, observationUsed DEVE ser null, mesmo que a bio pareça informativa.',
+    'Nunca afirme a profissão, o cargo ou a atividade de alguém a partir da bio. A bio é texto livre e frequentemente mistura vida pessoal com o negócio.',
     // The grounding check requires every content word of observationUsed to
-    // appear in the stored snapshot. A paraphrase fails it, so the field has to
+    // appear in the licensed field. A paraphrase fails it, so the field has to
     // be a quote: saying "trecho observado" was not enough to stop the model
     // from rewriting the bio in its own words and getting the message rejected.
-    'observationUsed deve ser COPIADO LITERALMENTE do bloco PERFIL PÚBLICO OBSERVADO, palavra por palavra, sem reescrever, resumir ou traduzir. Qualquer palavra que não esteja lá reprova a mensagem inteira.',
+    'observationUsed deve ser COPIADO LITERALMENTE desse campo, palavra por palavra, sem reescrever, resumir ou traduzir. Qualquer palavra que não esteja lá reprova a mensagem inteira.',
     'A mensagem em si pode ser escrita com suas palavras; a restrição literal vale apenas para observationUsed.',
     '',
     `DIRETRIZ DA VARIANTE EM TESTE: ${variantGuidance}`,
