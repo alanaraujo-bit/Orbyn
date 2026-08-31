@@ -1,0 +1,2 @@
+# SQL migrations are checksummed: their bytes must not change per platform.
+*.sql text eol=lf

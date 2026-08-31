@@ -7,7 +7,7 @@ import { callStructured } from '@/integrations/openai/client';
 import { CLASSIFY_INSTRUCTIONS, leadContextBlock, openerInstructions, replyInstructions } from '@/integrations/openai/prompts';
 import type { Funnel } from '@/features/leads/states';
 import { classifyByRules, defaultActionFor, INTENTS, NEXT_ACTIONS, type Intent, type NextAction } from './intents';
-import { snapshotSearchText, validateObservation, validateOutboundText, type PolicyViolation } from './message-policy';
+import { validateObservation, validateOutboundText, type PolicyViolation } from './message-policy';
 
 /**
  * Commercial conversation engine.
@@ -142,7 +142,10 @@ export async function generateOpener(input: OpenerInput): Promise<OpenerResult> 
 
   const violations = [
     ...validateOutboundText(result.data.message, config).violations,
-    ...validateObservation(result.data.observationUsed, snapshotSearchText(lead)).violations,
+    // Only the structurally identified category licenses a claim about what
+    // this business does - never the free text of the bio. See
+    // `validateObservation` and `parseProfileHeader` for why.
+    ...validateObservation(result.data.observationUsed, lead.category ?? '').violations,
   ];
   if (violations.length > 0) throw new MessagePolicyError(violations);
 

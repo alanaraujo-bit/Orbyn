@@ -25,7 +25,13 @@ export function readMigrationFiles(dir: string = MIGRATIONS_DIR): MigrationFile[
     .sort((a, b) => a.localeCompare(b, 'en'));
   return entries.map((name) => {
     const sql = fs.readFileSync(path.join(dir, name), 'utf8');
-    return { name, sql, checksum: sha256(sql) };
+    // The checksum must describe the SQL, not the line endings it happens to be
+    // stored with. On Windows, git's autocrlf rewrites the working copy on
+    // checkout, stash and branch switch, so a migration applied from an LF file
+    // reappears as CRLF and hashes differently - and the integrity check then
+    // reports history as edited, refusing to open the database at all. That is
+    // a false alarm about a file nobody touched.
+    return { name, sql, checksum: sha256(sql.replace(/\r\n/g, '\n')) };
   });
 }
 
