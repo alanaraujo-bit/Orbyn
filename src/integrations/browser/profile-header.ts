@@ -47,6 +47,60 @@ export interface ParsedProfileHeader {
   category: null;
 }
 
+/**
+ * The bio exactly as Instagram publishes it, out of the page's own meta
+ * description.
+ *
+ * Far better evidence than the rendered header: it is untruncated (the header
+ * cuts off at "... mais"), carries no interface chrome, and Instagram itself
+ * decides what belongs in it. The header text is only a fallback for profiles
+ * that publish no meta description at all.
+ *
+ * Format: `8.278 seguidores, 128 seguindo, 1.495 posts — Nome (@handle) no
+ * Instagram: "a bio, com quebras de linha"`.
+ */
+export function parseCanonicalBio(metaDescription: string | null): string | null {
+  if (!metaDescription) return null;
+  const quoted = /:\s*"([\s\S]*)"\s*$/.exec(metaDescription.trim())?.[1]?.trim();
+  return quoted && quoted.length > 0 ? quoted.slice(0, 600) : null;
+}
+
+/**
+ * Instagram's own machine description of an image, which it puts in `alt` when
+ * the author wrote no caption. It describes pixels, not a business: "May be an
+ * image of forklift and text that says..." is not something the account said.
+ */
+const MACHINE_GENERATED_ALT = /^(photo|video|reel)\s+(by|shared by)\b|may be an image of|foto de\b|pode ser uma imagem de/i;
+
+/** Captions the account actually wrote, from the profile grid. */
+export function parsePostCaptions(alts: readonly string[], limit = 6): string[] {
+  const captions: string[] = [];
+  for (const raw of alts) {
+    const text = raw.replace(/\s+/g, ' ').trim();
+    if (text.length < 25) continue;
+    if (MACHINE_GENERATED_ALT.test(text)) continue;
+    // Cut on a word boundary. A caption sliced mid-token leaves a fragment
+    // ("#autopec" out of "#autopecas_exemplo") that is not something the account
+    // wrote, and this text is used as evidence for what may be said to them.
+    captions.push(text.length > 400 ? text.slice(0, 400).replace(/\s+\S*$/, '') : text);
+    if (captions.length >= limit) break;
+  }
+  return captions;
+}
+
+/** Hashtags the account used, taken from the captions it wrote. */
+export function parsePostHashtags(captions: readonly string[], limit = 20): string[] {
+  const tags = new Set<string>();
+  for (const caption of captions) {
+    for (const match of caption.matchAll(/#([\p{L}\p{N}_]{2,40})/gu)) {
+      const tag = match[1];
+      if (tag) tags.add(tag.toLowerCase());
+      if (tags.size >= limit) return [...tags];
+    }
+  }
+  return [...tags];
+}
+
 export function parseProfileHeader(
   headerText: string,
   context: { handle: string; displayName: string | null },

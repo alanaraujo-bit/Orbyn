@@ -9,7 +9,8 @@ import { idempotencyKey } from '@/lib/ids';
 import { addHours, nextOperatingSlot } from '@/lib/time';
 import { createLogger } from '@/lib/logger';
 import { raiseAlert, recordEvent } from '@/lib/audit';
-import { getLead, listLeads, qualifyLead, setNextAction } from '@/features/leads/repository';
+import { closeLead, getLead, listLeads, qualifyLead, setNextAction } from '@/features/leads/repository';
+import { storedStudy, studyProfile } from '@/features/leads/profile-study';
 import { runDiscovery, defaultDiscoverySource, discoveryKeywords } from '@/features/leads/discovery';
 import { sendFirstContact } from '@/features/campaigns/first-contact';
 import { effectiveDailyCap, evaluatePacing, lastBrowserDmAt, scheduleNextDm } from '@/features/campaigns/guardrails';
@@ -65,8 +66,21 @@ const inboundPayload = z.object({ webhookEventId: z.string().min(1) });
 
 const qualifyLeadHandler: JobHandler = async ({ job, db }) => {
   const { leadId } = payloadOf(job, leadPayload);
+
+  // ICP scoring runs first because it is free and deterministic: there is no
+  // point paying a model to study a profile that is already out of the market.
   const result = qualifyLead(leadId, db);
   if (!result.qualified) return `Lead fora do ICP (score ${result.score}); encerrado.`;
+
+  // Then understand the profile, before it can become someone we write to. A
+  // lead whose activity cannot be established from its own published evidence
+  // is closed here, so it never reaches the backlog and is never contacted -
+  // rather than being contacted with a vaguer message.
+  const study = await studyProfile(getLead(leadId, db), db);
+  if (study.activity === null) {
+    closeLead(leadId, `perfil não compreendido: ${study.reason ?? 'evidência insuficiente'}`, 'worker', db);
+    return `Atividade não estabelecida (${study.reason ?? 'evidência insuficiente'}); lead encerrado sem contato.`;
+  }
   // The send is not scheduled here on purpose - see `dispatchOutreachHandler`.
   // The lead simply waits in `qualified`, and the dispatcher picks it up when
   // there is actually room to contact someone.
@@ -110,12 +124,23 @@ const dispatchOutreachHandler: JobHandler = async ({ db, now }) => {
   const inFlight = countActiveJobs('send_first_dm', db);
   if (inFlight > 0) return `Já há ${inFlight} primeiro contato em andamento.`;
 
-  const candidate = listLeads(
+  const waiting = listLeads(
     { stages: ['qualified'], channelStates: ['browser_contact_pending'], limit: 25 },
     db,
-  ).find((lead) => lead.doNotContact === 0);
+  ).filter((lead) => lead.doNotContact === 0);
 
-  if (!candidate) return 'Nenhum lead qualificado aguardando primeiro contato.';
+  // Nobody is written to before the system can say what they do. The gate lives
+  // in `qualify_lead` too, but it is repeated here because it is the last point
+  // before a real message: leads qualified before the study step existed are
+  // still sitting in this backlog.
+  const candidate = waiting.find((lead) => storedStudy(lead)?.activity);
+
+  if (!candidate) {
+    const unstudied = waiting.length;
+    return unstudied > 0
+      ? `Nenhum lead com atividade estabelecida (${unstudied} aguardando estudo).`
+      : 'Nenhum lead qualificado aguardando primeiro contato.';
+  }
 
   // Anchor the gap on the previous DM rather than on this tick, so sends stay
   // irregularly spaced the way a person types them. Anchoring on `now` would

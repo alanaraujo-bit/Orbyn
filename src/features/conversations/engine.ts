@@ -6,6 +6,7 @@ import { isCapabilityUsable } from '@/features/system/capabilities';
 import { callStructured } from '@/integrations/openai/client';
 import { CLASSIFY_INSTRUCTIONS, leadContextBlock, openerInstructions, replyInstructions } from '@/integrations/openai/prompts';
 import type { Funnel } from '@/features/leads/states';
+import { storedStudy } from '@/features/leads/profile-study';
 import { classifyByRules, defaultActionFor, INTENTS, NEXT_ACTIONS, type Intent, type NextAction } from './intents';
 import { validateObservation, validateOutboundText, type PolicyViolation } from './message-policy';
 
@@ -89,7 +90,11 @@ export class MessagePolicyError extends Error {
 export function templateOpener(lead: LeadRow, config: BusinessConfig): OpenerResult {
   const name = (lead.displayName ?? '').trim().split(/\s+/)[0] ?? '';
   const greeting = name.length > 1 ? `Oi, ${name}!` : 'Oi, tudo bem?';
-  const observation = lead.category && lead.category.trim().length > 0 ? lead.category.trim() : null;
+  // Same licensing rule as the AI path: only an established activity or a real
+  // category may be asserted. This line used to read `lead.category` straight
+  // from the scrape, which is how "vocês trabalham com mais" and "trabalham com
+  // seguir" became possible sentences.
+  const observation = storedStudy(lead)?.activity?.trim() || (lead.category?.trim() ?? '') || null;
   const middle =
     observation !== null
       ? `Vi aqui no perfil que vocês trabalham com ${observation.toLowerCase()}.`
@@ -102,6 +107,20 @@ export function templateOpener(lead: LeadRow, config: BusinessConfig): OpenerRes
   const message = `${greeting} ${middle} ${closing}`;
   const policy = validateOutboundText(message, config);
   return { message, observationUsed: observation, generator: 'template', violations: policy.violations };
+}
+
+/**
+ * The only text that may license a claim about what this business does.
+ *
+ * Deliberately not the bio. Bio is free text in which a person writes about
+ * themselves, and a distributor whose owner listed "Profissão mecânico" was
+ * told he worked as a mechanic - every word grounded, the claim still false.
+ * What is allowed here is the activity the study established from the account's
+ * own published evidence, plus Instagram's category when there is one.
+ */
+export function licensedObservationText(lead: LeadRow): string {
+  const study = storedStudy(lead);
+  return [study?.activity ?? '', lead.category ?? ''].filter((entry) => entry.trim().length > 0).join(' \n ');
 }
 
 export async function generateOpener(input: OpenerInput): Promise<OpenerResult> {
@@ -142,10 +161,10 @@ export async function generateOpener(input: OpenerInput): Promise<OpenerResult> 
 
   const violations = [
     ...validateOutboundText(result.data.message, config).violations,
-    // Only the structurally identified category licenses a claim about what
-    // this business does - never the free text of the bio. See
-    // `validateObservation` and `parseProfileHeader` for why.
-    ...validateObservation(result.data.observationUsed, lead.category ?? '').violations,
+    // Licensed by what the study established about this business, plus the
+    // category when Instagram gave us one - never the free text of the bio. See
+    // `validateObservation` and `studyProfile` for why.
+    ...validateObservation(result.data.observationUsed, licensedObservationText(lead)).violations,
   ];
   if (violations.length > 0) throw new MessagePolicyError(violations);
 
