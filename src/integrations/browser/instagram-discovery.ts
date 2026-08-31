@@ -5,7 +5,7 @@ import { randomIntBetween } from '@/lib/time';
 import { sleep } from '@/lib/sleep';
 import { normalizeHandle, profileUrl } from '@/features/leads/handle';
 import { connectToChrome, disconnect, withAgentPage } from './cdp';
-import { parseProfileHeader } from './profile-header';
+import { parseCanonicalBio, parsePostCaptions, parsePostHashtags, parseProfileHeader } from './profile-header';
 import { detectSafetySignal } from './safety';
 
 const log = createLogger('browser.discovery');
@@ -26,6 +26,9 @@ export interface PublicProfileRead {
   externalUrl: string | null;
   followersCount: number | null;
   isBusinessAccount: boolean | null;
+  /** Captions the account wrote on its own recent posts. */
+  postCaptions: string[];
+  postHashtags: string[];
   provenance: Record<string, string>;
 }
 
@@ -110,7 +113,22 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
         .getAttribute('href', { timeout: 3_000 })
         .catch(() => null);
 
-      const { bio, category } = parseProfileHeader(headerText, { handle, displayName });
+      const header_ = parseProfileHeader(headerText, { handle, displayName });
+      // Prefer what Instagram publishes over what the page happens to render.
+      const bio = parseCanonicalBio(description) ?? header_.bio;
+      const category = header_.category;
+
+      // What the account itself has been posting about. This is the evidence
+      // that lets the system say it knows a business before writing to it, and
+      // it was never collected: `postCaptions` and `postHashtags` were read by
+      // scoring, by the opener prompt and by the content policy, while nothing
+      // anywhere wrote them - every lead was judged on a profile header alone.
+      const alts = await page
+        .locator('main a[href*="/p/"] img, main a[href*="/reel/"] img')
+        .evaluateAll((nodes) => nodes.slice(0, 12).map((node) => (node as HTMLImageElement).alt ?? ''))
+        .catch(() => [] as string[]);
+      const postCaptions = parsePostCaptions(alts);
+      const postHashtags = parsePostHashtags(postCaptions);
 
       return {
         handle: normalizeHandle(handle),
@@ -119,6 +137,8 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
         category,
         externalUrl,
         followersCount,
+        postCaptions,
+        postHashtags,
         // Not derivable from the header text. This used to be `category !== null`,
         // which really meant "the header contained a short line" - true for every
         // profile, so every lead counted as a business account and collected the
@@ -126,7 +146,8 @@ export async function readPublicProfile(handle: string): Promise<PublicProfileRe
         isBusinessAccount: null,
         provenance: {
           displayName: 'instagram_profile_title',
-          bio: 'instagram_profile_header',
+          bio: description ? 'instagram_meta_description' : 'instagram_profile_header',
+          postCaptions: 'instagram_profile_grid_alt',
           followersCount: 'instagram_profile_meta_description',
           externalUrl: 'instagram_profile_header_link',
         },
