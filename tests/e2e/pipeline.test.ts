@@ -50,12 +50,16 @@ function fakeSender(): ApiSender & { calls: { recipientId: string; text: string 
 /** Drains the queue, with `now` far enough ahead to clear pacing delays. */
 async function drain(driver: SimulatedBrowserDriver, sender: ApiSender, maxIterations = 40): Promise<string[]> {
   const log: string[] = [];
+  // Stands in for the recurring dispatcher tick. Qualification no longer
+  // schedules a send itself: leads wait in `qualified` until the dispatcher
+  // finds room for one, so without a tick nothing would ever be contacted.
+  enqueue({ type: 'dispatch_outreach' });
   for (let index = 0; index < maxIterations; index += 1) {
     const result = await runOnce({
       dmDriver: driver,
       apiSender: sender,
       now: () => new Date(Date.now() + 5 * 60_000),
-      types: ['qualify_lead', 'send_first_dm', 'process_inbound'],
+      types: ['qualify_lead', 'dispatch_outreach', 'send_first_dm', 'process_inbound'],
     });
     if (!result.ranJob) break;
     log.push(`${result.jobType}:${result.status}`);

@@ -214,7 +214,7 @@ export interface ChannelChange {
 
 export function transitionChannel(change: ChannelChange, db: Db = getDb()): LeadRow {
   const lead = getLead(change.leadId, db);
-  assertChannelTransition(lead.channelState as ChannelState, change.to);
+  assertChannelTransition(lead.channelState as ChannelState, change.to, change.actor);
   const owner = change.owner ?? ownerForChannelState(change.to);
   const now = nowIso();
   db.update(leads)
@@ -332,10 +332,20 @@ export function qualifyLead(leadId: string, db: Db = getDb()): QualifyResult {
     .where(eq(leads.id, lead.id))
     .run();
 
+  // Re-scoring a lead that already reached the target stage is a no-op, not an
+  // error. Qualification runs from more than one path (discovery, operator
+  // import, a manual retry), and the state machine rejects qualified →
+  // qualified: letting that throw dead-lettered the job, which meant the
+  // follow-up work it was supposed to enqueue never happened and the lead was
+  // stranded mid-funnel with nothing scheduled to pick it up again.
   const passed = qualifies(scored.score);
-  const updated = passed
-    ? transitionStage({ leadId: lead.id, to: 'qualified', actor: 'worker', reason: `score=${scored.score}` }, db)
-    : closeLead(lead.id, `fora do ICP (score=${scored.score})`, 'worker', db);
+  const target = passed ? 'qualified' : 'closed';
+  const alreadyThere = lead.pipelineStage === target;
+  const updated = alreadyThere
+    ? getLead(lead.id, db)
+    : passed
+      ? transitionStage({ leadId: lead.id, to: 'qualified', actor: 'worker', reason: `score=${scored.score}` }, db)
+      : closeLead(lead.id, `fora do ICP (score=${scored.score})`, 'worker', db);
 
   recordEvent(
     { type: 'lead.qualified', funnel: lead.funnel, leadId: lead.id, payload: { score: scored.score, qualified: passed } },

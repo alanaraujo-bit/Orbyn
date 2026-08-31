@@ -36,17 +36,28 @@ export class AppError extends Error {
   readonly code: ErrorCode;
   readonly details: Record<string, unknown>;
   readonly retryable: boolean;
+  /**
+   * "Not yet", as opposed to "it failed". Pacing, operating hours and an
+   * unavailable capability all mean the job was never really attempted, so the
+   * queue reschedules it without spending one of its attempts. Without the
+   * distinction, waiting for your turn is indistinguishable from failing, and a
+   * lead that keeps landing on the minimum-interval boundary dies after four
+   * waits - having never been contacted once.
+   */
+  readonly deferral: boolean;
 
   constructor(
     code: ErrorCode,
     message: string,
-    options: { details?: Record<string, unknown>; retryable?: boolean; cause?: unknown } = {},
+    options: { details?: Record<string, unknown>; retryable?: boolean; deferral?: boolean; cause?: unknown } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'AppError';
     this.code = code;
     this.details = options.details ?? {};
-    this.retryable = options.retryable ?? false;
+    this.deferral = options.deferral ?? false;
+    // A deferral is retryable by definition: the work still has to happen.
+    this.retryable = options.retryable ?? this.deferral;
   }
 }
 

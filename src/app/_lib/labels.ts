@@ -95,6 +95,7 @@ export const CAPABILITY_LABELS: Record<RuntimeCapability, string> = {
 export const JOB_TYPE_LABELS: Record<JobType, string> = {
   discover_leads: 'Descobrir leads',
   qualify_lead: 'Qualificar lead',
+  dispatch_outreach: 'Liberar próximo contato',
   send_first_dm: 'Enviar 1ª DM',
   process_inbound: 'Processar resposta',
   send_api_reply: 'Responder pela API',

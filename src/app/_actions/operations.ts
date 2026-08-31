@@ -18,7 +18,13 @@ import {
   RUNTIME_CAPABILITIES,
   type RuntimeCapability,
 } from '@/features/system/capabilities';
-import { applyDoNotContact, getLead, registerDiscoveredLead, transitionStage } from '@/features/leads/repository';
+import {
+  applyDoNotContact,
+  getLead,
+  registerDiscoveredLead,
+  transitionChannel,
+  transitionStage,
+} from '@/features/leads/repository';
 import { normalizeHandle } from '@/features/leads/handle';
 import { CUSTOMER_STAGES, AFFILIATE_STAGES, type Funnel, type PipelineStage } from '@/features/leads/states';
 import { cancelJob, cancelJobsForLead, enqueue, getJob, requeueJob } from '@/worker/queue';
@@ -171,6 +177,34 @@ export async function scheduleFirstContactAction(leadId: string): Promise<Action
       ok: true,
       message: result.duplicate ? 'Já existe um primeiro contato na fila.' : 'Primeiro contato enfileirado.',
     };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+/**
+ * Puts a lead parked in `human_review_required` back into the outreach queue.
+ *
+ * Only the operator may take this route. The worker deliberately has no way
+ * back: it must not silently retry something that already went wrong. But with
+ * no route at all the state was terminal in practice, and a transient failure -
+ * Chrome closed mid-send, a page that never loaded - buried the lead for good.
+ * The operator can see the alert and the evidence screenshot first.
+ */
+export async function returnToOutreachAction(leadId: string): Promise<ActionResult> {
+  try {
+    const lead = getLead(leadId);
+    if (lead.doNotContact === 1) return { ok: false, message: 'Lead está em não contatar.' };
+    if (lead.channelState !== 'human_review_required' && lead.channelState !== 'blocked') {
+      return { ok: false, message: 'Este lead não está parado em revisão humana.' };
+    }
+    transitionChannel(
+      { leadId, to: 'browser_contact_pending', actor: 'operator', reason: 'operador devolveu à fila de contato' },
+      undefined,
+    );
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath('/clientes');
+    return { ok: true, message: 'Lead devolvido à fila. O envio será liberado na próxima vaga.' };
   } catch (error) {
     return fail(error);
   }

@@ -17,6 +17,7 @@ import { recordAudit, recordEvent } from '@/lib/audit';
 export const JOB_TYPES = [
   'discover_leads',
   'qualify_lead',
+  'dispatch_outreach',
   'send_first_dm',
   'process_inbound',
   'send_api_reply',
@@ -88,6 +89,16 @@ export function enqueue(input: EnqueueInput, db: Db = getDb()): EnqueueResult {
     throw error;
   }
   return { job: row, duplicate: false };
+}
+
+/** Jobs of a type that are queued or running right now. */
+export function countActiveJobs(type: JobType, db: Db = getDb()): number {
+  const row = db
+    .select({ total: sql<number>`count(*)` })
+    .from(jobs)
+    .where(and(eq(jobs.type, type), inArray(jobs.status, ['pending', 'running'])))
+    .get();
+  return row?.total ?? 0;
 }
 
 export function getJob(id: string, db: Db = getDb()): JobRow {
@@ -208,6 +219,35 @@ export function failJob(id: string, error: string, options: FailureOptions, db: 
     .where(eq(jobs.id, id))
     .run();
   return { ...job, status: 'pending', scheduledAt: retryAt.toISOString() };
+}
+
+/**
+ * Puts a job back on the queue for a reason that is not a failure: the pacing
+ * window, operating hours, or a capability that is off right now.
+ *
+ * `claimNextJob` increments `attempts` on every claim, before the handler gets
+ * to say whether it even tried. So the attempt spent getting here is given
+ * back; otherwise four consecutive "wait your turn" answers dead-letter a job
+ * that never once reached Instagram.
+ */
+export function deferJob(id: string, retryAt: Date, reason: string, db: Db = getDb()): JobRow {
+  const job = getJob(id, db);
+  const now = nowIso();
+  const attempts = Math.max(0, job.attempts - 1);
+  db.update(jobs)
+    .set({
+      status: 'pending',
+      attempts,
+      scheduledAt: retryAt.toISOString(),
+      error: reason.slice(0, 2000),
+      startedAt: null,
+      lockedBy: null,
+      lockExpiresAt: null,
+      updatedAt: now,
+    })
+    .where(eq(jobs.id, id))
+    .run();
+  return { ...job, status: 'pending', attempts, scheduledAt: retryAt.toISOString() };
 }
 
 export function cancelJob(id: string, reason: string, db: Db = getDb()): void {

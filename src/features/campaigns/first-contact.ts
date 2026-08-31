@@ -189,6 +189,32 @@ export async function sendFirstContact(input: FirstContactInput): Promise<FirstC
         evidence: send.evidence,
       };
     }
+
+    // A profile with no message button is a fact about that profile, not a
+    // malfunction of ours: the button will still be missing on the fourth try.
+    // Retrying spends the job's attempts and, worse, feeds the browser circuit
+    // breaker - so a handful of unreachable prospects could pause outreach to
+    // everyone. Close the lead instead and say why.
+    if (send.status === 'messaging_unavailable') {
+      closeLead(lead.id, 'perfil não aceita mensagem direta', 'worker', db);
+      raiseAlert(
+        {
+          kind: 'exception',
+          severity: 'info',
+          code: 'browser_action_failed',
+          title: 'Perfil não aceita mensagem direta',
+          detail: send.message ?? 'Botão de mensagem não encontrado no perfil.',
+          context: { evidence: send.evidence, handle: lead.handle },
+          leadId: lead.id,
+          jobId: input.jobId,
+          dedupeKey: `messaging_unavailable:${lead.id}`,
+        },
+        db,
+      );
+      recordEvent({ type: 'outreach.messaging_unavailable', funnel, leadId: lead.id, payload: { handle: lead.handle } }, db);
+      return { status: 'messaging_unavailable', detail: send.message ?? send.status, evidence: send.evidence };
+    }
+
     const state = recordBreakerFailure('browser', send.message ?? send.status, db);
     raiseAlert(
       {

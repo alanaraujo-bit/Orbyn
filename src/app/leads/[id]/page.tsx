@@ -23,7 +23,11 @@ import {
   STAGE_LABELS,
   labelOr,
 } from '@/app/_lib/labels';
-import { markDoNotContactAction, scheduleFirstContactAction } from '@/app/_actions/operations';
+import {
+  markDoNotContactAction,
+  returnToOutreachAction,
+  scheduleFirstContactAction,
+} from '@/app/_actions/operations';
 import { StageSelector } from './stage-selector';
 
 export const dynamic = 'force-dynamic';
@@ -237,6 +241,15 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
                   >
                     Enfileirar primeiro contato
                   </ActionButton>
+                  {lead.channelState === 'human_review_required' || lead.channelState === 'blocked' ? (
+                    <ActionButton
+                      block
+                      confirm="O lead volta para a fila e será contatado na próxima vaga de envio."
+                      action={returnToOutreachAction.bind(null, lead.id)}
+                    >
+                      Devolver à fila de contato
+                    </ActionButton>
+                  ) : null}
                   <StageSelector leadId={lead.id} funnel={lead.funnel} current={lead.pipelineStage as PipelineStage} />
                   <ActionButton
                     block
