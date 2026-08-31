@@ -17,6 +17,7 @@ import { expireApiWindow, requireHumanReview } from '@/features/conversations/ch
 import { deliverApiReply, processInboundMessage, type ApiSender } from '@/features/conversations/inbound';
 import { conversationWithLead, lastOutboundMessage } from '@/features/conversations/repository';
 import { optimizeExperiments } from '@/features/experiments/optimizer';
+import { learnDiscoveryRanking, learnIcpKeywordWeights } from '@/features/experiments/keyword-learning';
 import { anonymizeExpiredLeads } from '@/features/privacy/retention';
 import { probeWebhookReachability } from '@/features/system/webhook-reachability';
 import { createBackup, pruneBackups } from '@/db/backup';
@@ -295,10 +296,23 @@ const backupHandler: JobHandler = async () => {
   return `Backup criado (${Math.round(backup.bytes / 1024)} KB); ${pruned.length} antigos removidos.`;
 };
 
+/**
+ * One optimisation pass: the message experiments, then the two keyword loops.
+ *
+ * Keyword learning reads the whole lead history rather than one experiment, so
+ * it is orchestrated here instead of inside `optimizeExperiments` - mixing it
+ * into that function's per-experiment results would give the two very different
+ * things the same shape.
+ */
 const optimizeHandler: JobHandler = async ({ db }) => {
   const outcomes = optimizeExperiments(db);
   const changed = outcomes.filter((outcome) => outcome.action !== 'unchanged');
-  return `Otimização: ${outcomes.length} experimentos avaliados, ${changed.length} ajustados.`;
+
+  const learning = [learnDiscoveryRanking(db), learnIcpKeywordWeights(db)];
+  for (const outcome of learning) log.info('keyword learning', { action: outcome.action, detail: outcome.detail });
+  const learned = learning.filter((outcome) => outcome.action === 'written');
+
+  return `Otimização: ${outcomes.length} experimentos avaliados, ${changed.length} ajustados; aprendizado de palavras-chave: ${learned.length} de ${learning.length} atualizados. ${learning.map((entry) => entry.detail).join(' ')}`;
 };
 
 export const HANDLERS: Record<JobType, JobHandler> = {

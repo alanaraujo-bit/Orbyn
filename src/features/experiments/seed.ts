@@ -77,10 +77,15 @@ export function ensureExperiment(input: SeedExperimentInput, db: Db = getDb()): 
 export const DEFAULT_OPENER_EXPERIMENT: SeedExperimentInput = {
   name: 'abertura-cliente-v1',
   hypothesis:
-    'Uma abertura que cita algo concreto observado no perfil gera mais encaminhamentos ao WhatsApp do que uma abertura neutra.',
+    'Uma abertura que cita algo concreto observado no perfil gera mais respostas do que uma abertura neutra.',
   funnel: 'customer',
   scope: 'opener',
-  primaryMetric: 'whatsapp_handoff',
+  // An opener can cause a reply; it cannot plausibly cause a WhatsApp handoff
+  // on its own, since everything between the two is a different conversation.
+  // Measuring the terminal stage here diluted the effect and pushed the sample
+  // out by weeks. Later stages belong to experiments on the scopes that drive
+  // them.
+  primaryMetric: 'replied',
   minSampleSize: 60,
   variants: [
     {
