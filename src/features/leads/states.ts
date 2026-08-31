@@ -126,16 +126,36 @@ export function assertStageTransition(funnel: Funnel, from: PipelineStage, to: P
   }
 }
 
-export function canTransitionChannel(from: ChannelState, to: ChannelState): boolean {
+/**
+ * Edges only a human may take.
+ *
+ * `human_review_required` is where the system parks a lead it could not handle,
+ * and every automatic route out of it leads onward, never back to the browser
+ * queue. That asymmetry is deliberate - the worker must not quietly retry
+ * something that already went wrong - but with no route back at all the state
+ * was terminal in practice: a transient failure (Chrome closed mid-send, a page
+ * that did not load) buried the lead for good. The operator, who can look at
+ * the alert and the evidence screenshot, may put it back in line.
+ */
+const OPERATOR_ONLY_CHANNEL_TRANSITIONS: Record<string, readonly ChannelState[]> = {
+  human_review_required: ['browser_contact_pending'],
+  blocked: ['browser_contact_pending'],
+};
+
+export type ChannelActor = 'operator' | 'worker' | 'system' | 'ai' | 'webhook';
+
+export function canTransitionChannel(from: ChannelState, to: ChannelState, actor?: ChannelActor): boolean {
   if (from === to) return false;
-  const allowed = CHANNEL_TRANSITIONS[from];
-  return allowed.includes(to);
+  if (CHANNEL_TRANSITIONS[from].includes(to)) return true;
+  if (actor !== 'operator') return false;
+  return (OPERATOR_ONLY_CHANNEL_TRANSITIONS[from] ?? []).includes(to);
 }
 
-export function assertChannelTransition(from: ChannelState, to: ChannelState): void {
-  if (!canTransitionChannel(from, to)) {
+export function assertChannelTransition(from: ChannelState, to: ChannelState, actor?: ChannelActor): void {
+  if (!canTransitionChannel(from, to, actor)) {
+    const operatorCould = (OPERATOR_ONLY_CHANNEL_TRANSITIONS[from] ?? []).includes(to);
     throw new AppError('invalid_state_transition', `Transição de canal inválida: ${from} → ${to}.`, {
-      details: { from, to },
+      details: { from, to, actor: actor ?? null, requiresOperator: operatorCould },
     });
   }
 }

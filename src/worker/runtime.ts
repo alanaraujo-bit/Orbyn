@@ -8,7 +8,7 @@ import { getEnv } from '@/lib/env';
 import { isCapabilityUsable } from '@/features/system/capabilities';
 import type { DmDriver } from '@/integrations/browser/types';
 import type { ApiSender } from '@/features/conversations/inbound';
-import { claimNextJob, completeJob, failJob, releaseWorkerLeases, type JobType } from './queue';
+import { claimNextJob, completeJob, deferJob, failJob, releaseWorkerLeases, type JobType } from './queue';
 import { defaultDmDriver, HANDLERS, reportDeadJob, scheduleRecurringJobs } from './handlers';
 
 const log = createLogger('worker');
@@ -43,9 +43,16 @@ export interface RunOnceResult {
 const REQUIRED_CAPABILITY: Partial<Record<JobType, 'browser_outreach' | 'api_messaging'>> = {
   send_first_dm: 'browser_outreach',
   discover_leads: 'browser_outreach',
+  // `dispatch_outreach` is deliberately absent: it only reads state and queues
+  // work, so parking it on a paused capability would leave an immortal poll
+  // tick behind (a deferral hands the attempt back, and a new tick is enqueued
+  // every two minutes regardless). It checks the capability itself instead.
   send_api_reply: 'api_messaging',
   followup: 'api_messaging',
 };
+
+/** How long a job waits when the capability it needs is switched off. */
+const CAPABILITY_RETRY_MS = 300_000;
 
 export async function runOnce(options: WorkerOptions = {}): Promise<RunOnceResult> {
   const db: Db = getDb();
@@ -64,9 +71,9 @@ export async function runOnce(options: WorkerOptions = {}): Promise<RunOnceResul
 
   const required = REQUIRED_CAPABILITY[jobType];
   if (required && !isCapabilityUsable(required, db)) {
-    // Not a failure: the capability is off or paused. Park the job instead of
-    // burning its attempts.
-    failJob(job.id, `Capacidade "${required}" indisponível.`, { retryable: true, retryAt: new Date(now.getTime() + 300_000) }, db);
+    // Not a failure: the capability is off or paused, and the job was never
+    // attempted. Park it and hand back the attempt the claim just spent.
+    deferJob(job.id, new Date(now.getTime() + CAPABILITY_RETRY_MS), `Capacidade "${required}" indisponível.`, db);
     return { ranJob: true, jobId: job.id, jobType, status: 'skipped', detail: `capacidade ${required} indisponível` };
   }
 
@@ -83,6 +90,16 @@ export async function runOnce(options: WorkerOptions = {}): Promise<RunOnceResul
     const retryable = isAppError(error) ? error.retryable : false;
     const retryAt =
       isAppError(error) && typeof error.details.retryAt === 'string' ? new Date(error.details.retryAt) : undefined;
+
+    // "Not yet" is not "it failed": the handler refused to start, so the job
+    // goes back to the queue with its attempt budget intact.
+    if (isAppError(error) && error.deferral) {
+      const when = retryAt ?? new Date(now.getTime() + CAPABILITY_RETRY_MS);
+      deferJob(job.id, when, `${payload.code}: ${payload.message}`, db);
+      log.info('job deferred', { jobId: job.id, jobType, code: payload.code, retryAt: when.toISOString() });
+      return { ranJob: true, jobId: job.id, jobType, status: 'skipped', detail: payload.message };
+    }
+
     const updated = failJob(job.id, `${payload.code}: ${payload.message}`, { retryable, retryAt }, db);
 
     if (updated.status === 'dead') {

@@ -3,14 +3,16 @@ import { z } from 'zod';
 import { getDb, type Db } from '@/db/client';
 import { conversations, leads, webhookEvents, type JobRow } from '@/db/schema';
 import { AppError } from '@/lib/errors';
+import { getEnv, operatingHours } from '@/lib/env';
+import { isCapabilityUsable } from '@/features/system/capabilities';
 import { idempotencyKey } from '@/lib/ids';
-import { addHours } from '@/lib/time';
+import { addHours, nextOperatingSlot } from '@/lib/time';
 import { createLogger } from '@/lib/logger';
 import { raiseAlert, recordEvent } from '@/lib/audit';
-import { getLead, qualifyLead, setNextAction } from '@/features/leads/repository';
-import { runDiscovery, defaultDiscoverySource } from '@/features/leads/discovery';
+import { getLead, listLeads, qualifyLead, setNextAction } from '@/features/leads/repository';
+import { runDiscovery, defaultDiscoverySource, discoveryKeywords } from '@/features/leads/discovery';
 import { sendFirstContact } from '@/features/campaigns/first-contact';
-import { scheduleNextDm } from '@/features/campaigns/guardrails';
+import { effectiveDailyCap, evaluatePacing, lastBrowserDmAt, scheduleNextDm } from '@/features/campaigns/guardrails';
 import { expireApiWindow, requireHumanReview } from '@/features/conversations/channel';
 import { deliverApiReply, processInboundMessage, type ApiSender } from '@/features/conversations/inbound';
 import { conversationWithLead, lastOutboundMessage } from '@/features/conversations/repository';
@@ -21,7 +23,7 @@ import { createBackup, pruneBackups } from '@/db/backup';
 import { InstagramBrowserDriver } from '@/integrations/browser/instagram-dm';
 import type { DmDriver } from '@/integrations/browser/types';
 import { extractInboundMessages, markWebhookProcessed, webhookPayloadSchema } from '@/integrations/instagram/webhook';
-import { enqueue, type JobType } from './queue';
+import { countActiveJobs, enqueue, type JobType } from './queue';
 
 const log = createLogger('worker.handlers');
 
@@ -64,20 +66,82 @@ const qualifyLeadHandler: JobHandler = async ({ job, db }) => {
   const { leadId } = payloadOf(job, leadPayload);
   const result = qualifyLead(leadId, db);
   if (!result.qualified) return `Lead fora do ICP (score ${result.score}); encerrado.`;
+  // The send is not scheduled here on purpose - see `dispatchOutreachHandler`.
+  // The lead simply waits in `qualified`, and the dispatcher picks it up when
+  // there is actually room to contact someone.
+  return `Lead qualificado (score ${result.score}); aguardando vaga de envio.`;
+};
 
-  enqueue(
+/**
+ * Releases outreach, one lead at a time, only when the pacing rules actually
+ * allow a send.
+ *
+ * The queue used to work the other way round: qualification enqueued a
+ * `send_first_dm` per lead the moment it scored well. That cannot scale past
+ * the daily cap. `scheduleNextDm` counts forward from *now*, so thirty leads
+ * qualified in the same minute all got a send scheduled for roughly the same
+ * instant; the first went out and the other twenty-nine woke to a pacing
+ * refusal, spent their attempts on it, dead-lettered, and were pushed to human
+ * review - manufacturing dead leads in direct proportion to how well discovery
+ * worked.
+ *
+ * Pulling inverts that. Supply (discovery, qualification) and delivery are
+ * decoupled: qualified leads accumulate harmlessly, and this job converts
+ * exactly one of them into a send whenever the cap and the interval permit.
+ * Ordering is by priority then ICP score, so the best lead in the backlog goes
+ * first rather than whoever happened to qualify earliest.
+ */
+const dispatchOutreachHandler: JobHandler = async ({ db, now }) => {
+  // Checked here rather than by the runtime's capability gate: this job must
+  // always run to completion. It is a poll, re-enqueued every couple of
+  // minutes, so deferring it would pile up ticks that never finish.
+  if (!isCapabilityUsable('browser_outreach', db)) {
+    return 'Envio por navegador indisponível; nada liberado.';
+  }
+
+  const pacing = evaluatePacing(now, db);
+  if (!pacing.allowed) {
+    return `Sem vaga de envio: ${pacing.reason ?? 'ritmo'} (${pacing.sentToday}/${pacing.cap} hoje).`;
+  }
+
+  // One send in flight at a time. Two would race the same interval and the
+  // loser would burn attempts on a refusal - the very thing this replaces.
+  const inFlight = countActiveJobs('send_first_dm', db);
+  if (inFlight > 0) return `Já há ${inFlight} primeiro contato em andamento.`;
+
+  const candidate = listLeads(
+    { stages: ['qualified'], channelStates: ['browser_contact_pending'], limit: 25 },
+    db,
+  ).find((lead) => lead.doNotContact === 0);
+
+  if (!candidate) return 'Nenhum lead qualificado aguardando primeiro contato.';
+
+  // Anchor the gap on the previous DM rather than on this tick, so sends stay
+  // irregularly spaced the way a person types them. Anchoring on `now` would
+  // line every send up with the dispatcher's own cadence, which is the kind of
+  // metronomic pattern the pacing rules exist to avoid. With no previous DM
+  // there is nothing to space away from, so the first one goes out at once -
+  // delaying it would only stall the day's first contact.
+  const previous = lastBrowserDmAt(db);
+  const desired = previous ? scheduleNextDm(previous) : now;
+  const sendAt = desired.getTime() > now.getTime() ? desired : now;
+
+  const queued = enqueue(
     {
       type: 'send_first_dm',
-      payload: { leadId },
-      leadId,
-      scheduledAt: scheduleNextDm(new Date()),
-      idempotencyKey: idempotencyKey('send_first_dm', leadId),
-      priority: result.lead.priority,
+      payload: { leadId: candidate.id },
+      leadId: candidate.id,
+      scheduledAt: sendAt,
+      idempotencyKey: idempotencyKey('send_first_dm', candidate.id),
+      priority: candidate.priority,
       maxAttempts: 4,
     },
     db,
   );
-  return `Lead qualificado (score ${result.score}); primeiro contato agendado.`;
+  if (queued.duplicate) return `@${candidate.handle} já possui um primeiro contato registrado.`;
+
+  const remaining = pacing.cap - pacing.sentToday;
+  return `Primeiro contato liberado para @${candidate.handle} (${remaining} de ${pacing.cap} restantes hoje).`;
 };
 
 const sendFirstDmHandler: JobHandler = async ({ job, dmDriver, now }) => {
@@ -85,8 +149,9 @@ const sendFirstDmHandler: JobHandler = async ({ job, dmDriver, now }) => {
   const result = await sendFirstContact({ leadId, mode: 'live', driver: dmDriver, jobId: job.id, now });
 
   if (result.status === 'skipped_pacing' && result.retryAt) {
+    // Never attempted, so this must not cost the job an attempt.
     throw new AppError('rate_limit_exceeded', result.detail ?? 'Ritmo de envio ainda não permite.', {
-      retryable: true,
+      deferral: true,
       details: { retryAt: result.retryAt.toISOString() },
     });
   }
@@ -122,24 +187,59 @@ const processInboundHandler: JobHandler = async ({ job, db, apiSender }) => {
   return `Inbound processado: ${outcomes.join(', ')}.`;
 };
 
-const discoverLeadsHandler: JobHandler = async ({ job, db }) => {
+/** Qualified leads waiting for a first contact right now. */
+function outreachBacklog(db: Db): number {
+  return listLeads({ stages: ['qualified'], channelStates: ['browser_contact_pending'], limit: 500 }, db).filter(
+    (lead) => lead.doNotContact === 0,
+  ).length;
+}
+
+/**
+ * Days of backlog to keep in hand. Enough that delivery never idles waiting for
+ * supply; small enough that we are not visiting hundreds of profiles to build a
+ * queue the daily cap will take a month to work through.
+ */
+const BACKLOG_TARGET_DAYS = 3;
+
+const discoverLeadsHandler: JobHandler = async ({ job, db, now }) => {
   const payload = payloadOf(job, discoverPayload);
+
+  // Discovery is the expensive, most visible half of this system: every keyword
+  // means real page views on Instagram. Sizing it to the backlog keeps supply
+  // tied to what delivery can actually consume.
+  const backlog = outreachBacklog(db);
+  const target = effectiveDailyCap(now, db) * BACKLOG_TARGET_DAYS;
+  if (backlog >= target) {
+    return `Descoberta adiada: ${backlog} leads qualificados já aguardando (alvo ${target}).`;
+  }
+
   const source = defaultDiscoverySource(db);
   if (!source) {
     throw new AppError('capability_disabled', 'Nenhuma fonte de descoberta automática disponível.', {
       details: { hint: 'configure CHROME_CDP_URL ou importe leads manualmente pelo painel' },
     });
   }
+
+  // Search only as wide as the deficit. A fixed limit per keyword scales with
+  // the keyword list instead of with demand: ten keywords at eight results is
+  // eighty profile visits to fill a backlog of fifteen. Deriving it from what
+  // is actually missing keeps the footprint proportional, and it grows on its
+  // own as the warm-up raises the daily cap.
+  const keywords = payload.keywords ?? discoveryKeywords(payload.funnel, db);
+  const deficit = Math.max(0, target - backlog);
+  const perKeyword =
+    payload.limitPerKeyword ?? Math.min(10, Math.max(1, Math.ceil(deficit / Math.max(1, keywords.length))));
+
   const result = await runDiscovery(
     {
       funnel: payload.funnel,
       source,
-      keywords: payload.keywords,
-      limitPerKeyword: payload.limitPerKeyword ?? 8,
+      keywords,
+      limitPerKeyword: perKeyword,
     },
     db,
   );
-  return `Descoberta: ${result.created} novos, ${result.duplicates} duplicados, ${result.suppressed} suprimidos.`;
+  return `Descoberta (${perKeyword}/palavra, déficit ${deficit}): ${result.created} novos, ${result.duplicates} duplicados, ${result.suppressed} suprimidos.`;
 };
 
 const followupHandler: JobHandler = async ({ job, db, now, apiSender }) => {
@@ -203,6 +303,7 @@ const optimizeHandler: JobHandler = async ({ db }) => {
 
 export const HANDLERS: Record<JobType, JobHandler> = {
   qualify_lead: qualifyLeadHandler,
+  dispatch_outreach: dispatchOutreachHandler,
   send_first_dm: sendFirstDmHandler,
   process_inbound: processInboundHandler,
   discover_leads: discoverLeadsHandler,
@@ -289,6 +390,33 @@ export function scheduleRecurringJobs(now: Date = new Date(), db: Db = getDb()):
     },
     db,
   );
+  // The outreach dispatcher. Frequent and cheap: it reads the pacing state and
+  // usually decides to do nothing. This is the job that turns qualified leads
+  // into sends, so if it stops running, outreach stops entirely.
+  enqueue(
+    {
+      type: 'dispatch_outreach',
+      scheduledAt: now,
+      idempotencyKey: idempotencyKey('dispatch_outreach', twoMinuteBucket(now)),
+      // A poll, not a task: a failed tick is replaced by the next one, and
+      // dead-lettering it would open an alert every two minutes.
+      maxAttempts: 1,
+    },
+    db,
+  );
+  // Discovery, once a day, self-limited by the backlog it already built. This
+  // is the first link of the chain discover -> qualify -> dispatch -> send;
+  // without it nothing new ever enters the funnel.
+  enqueue(
+    {
+      type: 'discover_leads',
+      payload: { funnel: 'customer' },
+      scheduledAt: nextOperatingSlot(now, operatingHours(), getEnv().OPERATING_TIMEZONE),
+      idempotencyKey: idempotencyKey('discover_leads', day),
+      maxAttempts: 2,
+    },
+    db,
+  );
   // Every five minutes, not daily: a dead tunnel costs a lead every hour it goes
   // unnoticed, and the check is one local HTTP round trip.
   enqueue(
@@ -301,6 +429,11 @@ export function scheduleRecurringJobs(now: Date = new Date(), db: Db = getDb()):
     },
     db,
   );
+}
+
+/** Bucket key that changes every two minutes, for the outreach dispatcher. */
+function twoMinuteBucket(now: Date): string {
+  return String(Math.floor(now.getTime() / 120_000));
 }
 
 /** Bucket key that changes every five minutes, so repeated scheduling is idempotent within the window. */

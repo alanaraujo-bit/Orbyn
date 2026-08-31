@@ -9,6 +9,7 @@ import {
   failJob,
   getJob,
   LEASE_SECONDS,
+  listJobs,
   queueStats,
   releaseWorkerLeases,
 } from '@/worker/queue';
@@ -97,7 +98,7 @@ describe('durable job queue', () => {
 });
 
 describe('worker runtime', () => {
-  it('runs a qualify job end to end and schedules the first contact', async () => {
+  it('qualifies a lead without scheduling the send itself', async () => {
     const lead = makeLead({ qualify: false });
     enqueue({ type: 'qualify_lead', payload: { leadId: lead.id }, leadId: lead.id });
 
@@ -105,7 +106,29 @@ describe('worker runtime', () => {
 
     expect(result.status).toBe('succeeded');
     expect(getLead(lead.id).pipelineStage).toBe('qualified');
-    expect(queueStats().pending).toBeGreaterThanOrEqual(1);
+    // Delivery is pulled, not pushed: the lead waits for the dispatcher.
+    expect(listJobs({ types: ['send_first_dm'] })).toHaveLength(0);
+  });
+
+  it('re-qualifying an already qualified lead is a no-op, not a dead job', async () => {
+    const lead = makeLead({ qualify: false });
+    enqueue({ type: 'qualify_lead', payload: { leadId: lead.id }, leadId: lead.id });
+    await runOnce({ dmDriver: new SimulatedBrowserDriver(), types: ['qualify_lead'] });
+    expect(getLead(lead.id).pipelineStage).toBe('qualified');
+
+    // Qualification reaches a lead from more than one path. The second pass
+    // used to throw qualified -> qualified, dead-letter, and strand the lead.
+    const { job } = enqueue({
+      type: 'qualify_lead',
+      payload: { leadId: lead.id },
+      leadId: lead.id,
+      idempotencyKey: 'requalify-test',
+    });
+    const again = await runOnce({ dmDriver: new SimulatedBrowserDriver(), types: ['qualify_lead'] });
+
+    expect(again.status).toBe('succeeded');
+    expect(getJob(job.id).status).toBe('succeeded');
+    expect(getLead(lead.id).pipelineStage).toBe('qualified');
   });
 
   it('parks a job whose capability is unavailable instead of burning attempts', async () => {
@@ -118,5 +141,8 @@ describe('worker runtime', () => {
     const parked = getJob(job.id);
     expect(parked.status).toBe('pending');
     expect(new Date(parked.scheduledAt).getTime()).toBeGreaterThan(Date.now());
+    // The point of parking: waiting for a capability must not count as a try,
+    // or four quiet waits would dead-letter a job that never once ran.
+    expect(parked.attempts).toBe(0);
   });
 });
