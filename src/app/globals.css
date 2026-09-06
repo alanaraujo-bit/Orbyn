@@ -284,3 +284,22 @@ summary {
     display: none;
   }
 }
+
+/* The ring that breathes out of the status dot while the operation is running.
+   It is the only motion on the overview, and it carries the one piece of state
+   a still screenshot cannot: that this is live, not a snapshot. */
+@keyframes status-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  70%,
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+@utility status-ping {
+  animation: status-ping 2.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}

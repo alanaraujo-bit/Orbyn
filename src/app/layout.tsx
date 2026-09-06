@@ -99,8 +99,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     .where(and(eq(alerts.status, 'open'), eq(alerts.severity, 'critical')))
     .all().length;
 
+  /* Which capabilities are down is said by the status rail below the nav, and
+     in full on the overview. A banner strip repeating it on all nine pages was
+     three lines of chrome above every H1 saying nothing the operator can act
+     on from where they are standing. */
   const globalPaused = capabilities.find((entry) => entry.id === 'global')?.paused ?? false;
-  const degraded = capabilities.filter((entry) => !entry.usable);
 
   /** Status rail, shared by the desktop sidebar and the mobile sheet. */
   const capabilityList = (
@@ -217,11 +220,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 {criticalAlerts === 1
                   ? '1 alerta crítico aberto exige atenção.'
                   : `${criticalAlerts} alertas críticos abertos exigem atenção.`}
-              </div>
-            ) : null}
-            {degraded.length > 0 && !globalPaused ? (
-              <div className="border-b border-line bg-surface-muted px-4 py-2 text-[12px] text-ink-muted md:px-6">
-                Capacidades indisponíveis: {degraded.map((entry) => CAPABILITY_SHORT[entry.id] ?? entry.id).join(', ')}.
               </div>
             ) : null}
 

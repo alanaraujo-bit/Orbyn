@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 
 /** Small presentational primitives shared by every page. */
@@ -277,5 +278,96 @@ export function Td({ children, className = '', title, label, role, empty }: Cell
       */}
       <div>{children}</div>
     </td>
+  );
+}
+
+/**
+ * A filled track. Used wherever a count sits against a ceiling the operator
+ * agreed to — the daily message cap, a budget — so the number and the room
+ * left are read in one glance instead of two.
+ */
+export function Meter({
+  value,
+  max,
+  tone = 'accent',
+  className = '',
+  label,
+}: {
+  value: number;
+  max: number;
+  tone?: Tone;
+  className?: string;
+  /** Announced to a screen reader, which cannot see the fill. */
+  label?: string;
+}) {
+  const fill = max > 0 ? Math.min(Math.max(value / max, 0), 1) : 0;
+  const bar =
+    tone === 'danger'
+      ? 'bg-danger'
+      : tone === 'warning'
+        ? 'bg-warning'
+        : tone === 'positive'
+          ? 'bg-positive'
+          : tone === 'neutral'
+            ? 'bg-ink-faint'
+            : 'bg-accent';
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={value}
+      aria-valuemin={0}
+      aria-valuemax={max}
+      aria-label={label}
+      className={`h-1.5 overflow-hidden rounded-full bg-line ${className}`}
+    >
+      <span
+        className={`block h-full rounded-full transition-[width] duration-500 ease-out ${bar}`}
+        style={{ width: `${Math.max(fill * 100, value > 0 ? 3 : 0)}%` }}
+      />
+    </div>
+  );
+}
+
+/**
+ * One line in a queue of things to read or act on.
+ *
+ * The whole row is the target when it links somewhere — a 12px handle inside a
+ * 44px row is a miss waiting to happen on a phone — so the anchor covers the
+ * row and the trailing text rides on top of it.
+ */
+export function ListRow({
+  leading,
+  title,
+  meta,
+  trailing,
+  href,
+}: {
+  leading?: ReactNode;
+  title: ReactNode;
+  meta?: ReactNode;
+  trailing?: ReactNode;
+  href?: string;
+}) {
+  const body = (
+    <>
+      {leading ? <span className="mt-0.5 shrink-0">{leading}</span> : null}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] leading-5 font-medium text-ink">{title}</span>
+        {meta ? <span className="mt-0.5 block truncate text-[11.5px] leading-4 text-ink-faint">{meta}</span> : null}
+      </span>
+      {trailing ? <span className="shrink-0 self-center text-[11.5px] text-ink-faint">{trailing}</span> : null}
+    </>
+  );
+
+  if (!href) {
+    return <div className="flex min-h-11 items-start gap-3 px-4 py-2.5">{body}</div>;
+  }
+  return (
+    <Link
+      href={href}
+      className="flex min-h-11 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface-muted focus-visible:bg-surface-muted"
+    >
+      {body}
+    </Link>
   );
 }
